@@ -46,7 +46,7 @@ schema:
   admin_token: password?
   cors_origins:
     - str
-  netlify_build_hook_url: url?
+  netlify_build_hook_url: str?
   git_ref: str
 map:
   - share:rw
