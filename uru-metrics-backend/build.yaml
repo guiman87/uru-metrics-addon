@@ -1,0 +1,7 @@
+# Tells Home Assistant Supervisor which base image to use per architecture.
+# The Supervisor passes the matching one as the BUILD_FROM build-arg into
+# the Dockerfile. Without this file, BUILD_FROM is empty and the build
+# fails with "base name (${BUILD_FROM}) should not be blank".
+build_from:
+  amd64: ghcr.io/home-assistant/amd64-base:3.20
+  aarch64: ghcr.io/home-assistant/aarch64-base:3.20
