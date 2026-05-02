@@ -18,9 +18,13 @@ hassio_api: false
 homeassistant_api: false
 host_network: false
 ports:
-  3000/tcp: 3000
+  # Default: no host-port binding. Other addons (Cloudflared, NGINX Proxy
+  # Manager) reach this API via the internal Docker hostname
+  # `addon_uru-metrics-backend:3000`. To expose on the LAN for testing,
+  # set a host port number here in HA's UI: addon → Configuration → Network.
+  3000/tcp: null
 ports_description:
-  3000/tcp: HTTP API. Expose publicly via the Cloudflared addon (recommended) or NGINX Proxy Manager.
+  3000/tcp: HTTP API. Leave disabled in production; expose via Cloudflared addon. Set a host port temporarily if you want to curl from the LAN.
 options:
   llm_provider: stub
   llm_model_categorize: claude-haiku-4-5-20251001
