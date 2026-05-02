@@ -91,12 +91,14 @@ CREATE TABLE IF NOT EXISTS topic_aliases (
 );
 
 CREATE TABLE IF NOT EXISTS llm_usage (
-  ts          TEXT NOT NULL,
-  provider    TEXT NOT NULL,
-  model       TEXT NOT NULL,
-  input_tok   INTEGER NOT NULL,
-  output_tok  INTEGER NOT NULL,
-  cost_usd    REAL NOT NULL
+  ts                       TEXT NOT NULL,
+  provider                 TEXT NOT NULL,
+  model                    TEXT NOT NULL,
+  input_tok                INTEGER NOT NULL,        -- uncached input tokens
+  output_tok               INTEGER NOT NULL,
+  cache_creation_input_tok INTEGER NOT NULL DEFAULT 0,
+  cache_read_input_tok     INTEGER NOT NULL DEFAULT 0,
+  cost_usd                 REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(ts);
 

@@ -6,10 +6,11 @@ import { assertUnderDailyCap, recordUsage } from './usage.js';
 
 const TOOL_NAME = 'return_structured_response';
 
-// NOTE: Prompt caching lives in the SDK's `beta` namespace as of @anthropic-ai/sdk@0.32.x.
-// Once we move to a release where cache_control is GA on the stable Messages API,
-// re-add `cache_control: { type: 'ephemeral' }` on the system block — at hourly
-// run cadence with a stable system prompt this is ~40% off input cost.
+// Anthropic prompt caching lives on `client.beta.messages.create` in @anthropic-ai/sdk
+// 0.32.x. We tag the system prompt and the tool schema with cache_control so the
+// per-stage static prefix is amortized across runs (≈40% off input tokens at our
+// hourly cadence, with a 5-min ephemeral TTL). Once we bump to an SDK release
+// where cache_control is on the stable Messages API, switch back to client.messages.
 export class ClaudeProvider implements LlmProvider {
   readonly name = 'claude' as const;
   private client: Anthropic;
@@ -29,24 +30,32 @@ export class ClaudeProvider implements LlmProvider {
       unknown
     >;
 
-    const res = await this.client.messages.create({
+    const res = await this.client.beta.messages.create({
       model,
       max_tokens: args.maxOutputTokens ?? 2048,
       temperature: args.temperature ?? 0,
-      system: args.system,
+      system: [
+        {
+          type: 'text',
+          text: args.system,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       tools: [
         {
           name: TOOL_NAME,
           description: 'Return the structured response for the user request.',
-          input_schema: inputSchema as Anthropic.Tool['input_schema'],
+          input_schema: inputSchema as Anthropic.Beta.BetaTool['input_schema'],
+          cache_control: { type: 'ephemeral' },
         },
       ],
       tool_choice: { type: 'tool', name: TOOL_NAME },
       messages: [{ role: 'user', content: args.user }],
+      betas: ['prompt-caching-2024-07-31'],
     });
 
     const toolUse = res.content.find(
-      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === TOOL_NAME,
+      (b): b is Anthropic.Beta.BetaToolUseBlock => b.type === 'tool_use' && b.name === TOOL_NAME,
     );
     if (!toolUse) {
       throw new Error(`Claude returned no tool_use block (stop_reason=${res.stop_reason})`);
@@ -55,12 +64,25 @@ export class ClaudeProvider implements LlmProvider {
 
     const inputTok = res.usage.input_tokens;
     const outputTok = res.usage.output_tokens;
+    const cacheCreationInputTok = res.usage.cache_creation_input_tokens ?? 0;
+    const cacheReadInputTok = res.usage.cache_read_input_tokens ?? 0;
     const { costUsd } = recordUsage({
       provider: this.name,
       model,
       inputTok,
       outputTok,
+      cacheCreationInputTok,
+      cacheReadInputTok,
     });
-    return { value, usage: { input: inputTok, output: outputTok, costUsd } };
+    return {
+      value,
+      usage: {
+        input: inputTok,
+        output: outputTok,
+        cacheCreationInput: cacheCreationInputTok,
+        cacheReadInput: cacheReadInputTok,
+        costUsd,
+      },
+    };
   }
 }

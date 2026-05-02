@@ -15,6 +15,24 @@ function applySchema(): void {
   console.log(`[migrate] Schema applied at ${db.name}`);
 }
 
+// Add a column if it doesn't already exist on `table`. SQLite supports ALTER
+// TABLE ADD COLUMN but lacks IF NOT EXISTS, so we probe pragma first.
+function addColumnIfMissing(table: string, column: string, definition: string): boolean {
+  const db = getDb();
+  const cols = db
+    .prepare<[], { name: string }>(`PRAGMA table_info(${table})`)
+    .all();
+  if (cols.some((c) => c.name === column)) return false;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  console.log(`[migrate] Added ${table}.${column}`);
+  return true;
+}
+
+function migrateLlmUsageCacheCols(): void {
+  addColumnIfMissing('llm_usage', 'cache_creation_input_tok', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('llm_usage', 'cache_read_input_tok', 'INTEGER NOT NULL DEFAULT 0');
+}
+
 function upsertSources(): void {
   const db = getDb();
   const stmt = db.prepare(`
@@ -49,6 +67,7 @@ function upsertSources(): void {
 
 function main(): void {
   applySchema();
+  migrateLlmUsageCacheCols();
   upsertSources();
 
   // Migrate topic slugs from "<base>-<hash>" to bare "<base>" wherever

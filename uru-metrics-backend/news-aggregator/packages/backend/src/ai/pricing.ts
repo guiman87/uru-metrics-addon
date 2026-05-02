@@ -26,11 +26,26 @@ export const PRICING: Record<string, ModelPrice> = {
   'stub-v1': { inputUsdPerMTok: 0, outputUsdPerMTok: 0 },
 };
 
-export function estimateCostUsd(model: string, inputTok: number, outputTok: number): number {
+// Anthropic ephemeral (5-min) prompt-caching multipliers vs. base input rate.
+// Cache writes cost more, cache reads cost much less. Applied uniformly to all
+// providers — non-Anthropic providers should pass 0 for cache token counts.
+export const CACHE_WRITE_MULTIPLIER = 1.25;
+export const CACHE_READ_MULTIPLIER = 0.1;
+
+export function estimateCostUsd(
+  model: string,
+  inputTok: number,
+  outputTok: number,
+  cacheCreationTok: number = 0,
+  cacheReadTok: number = 0,
+): number {
   const p = PRICING[model];
-  if (!p) {
-    // Unknown model — fall back to Sonnet rates so we don't under-bill.
-    return (inputTok / 1_000_000) * 3.0 + (outputTok / 1_000_000) * 15.0;
-  }
-  return (inputTok / 1_000_000) * p.inputUsdPerMTok + (outputTok / 1_000_000) * p.outputUsdPerMTok;
+  const inputRate = p?.inputUsdPerMTok ?? 3.0; // unknown model → Sonnet input rate
+  const outputRate = p?.outputUsdPerMTok ?? 15.0;
+  return (
+    (inputTok / 1_000_000) * inputRate +
+    (cacheCreationTok / 1_000_000) * inputRate * CACHE_WRITE_MULTIPLIER +
+    (cacheReadTok / 1_000_000) * inputRate * CACHE_READ_MULTIPLIER +
+    (outputTok / 1_000_000) * outputRate
+  );
 }

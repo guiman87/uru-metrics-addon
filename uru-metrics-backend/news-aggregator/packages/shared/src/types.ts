@@ -121,8 +121,10 @@ export interface ArticleListResponse {
 // ─── LLM provider ─────────────────────────────────────────────────────────
 
 export interface LlmUsage {
-  input: number;
+  input: number; // uncached input tokens billed at base rate
   output: number;
+  cacheCreationInput?: number; // tokens written to cache, billed at 1.25× input rate
+  cacheReadInput?: number; // tokens read from cache, billed at 0.1× input rate
   costUsd: number;
 }
 

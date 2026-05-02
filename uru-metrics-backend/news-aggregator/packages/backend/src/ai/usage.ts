@@ -27,12 +27,24 @@ export function recordUsage(args: {
   model: string;
   inputTok: number;
   outputTok: number;
+  cacheCreationInputTok?: number;
+  cacheReadInputTok?: number;
 }): { costUsd: number } {
-  const costUsd = estimateCostUsd(args.model, args.inputTok, args.outputTok);
+  const cacheCreation = args.cacheCreationInputTok ?? 0;
+  const cacheRead = args.cacheReadInputTok ?? 0;
+  const costUsd = estimateCostUsd(
+    args.model,
+    args.inputTok,
+    args.outputTok,
+    cacheCreation,
+    cacheRead,
+  );
   getDb()
     .prepare(
-      `INSERT INTO llm_usage (ts, provider, model, input_tok, output_tok, cost_usd)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO llm_usage
+         (ts, provider, model, input_tok, output_tok,
+          cache_creation_input_tok, cache_read_input_tok, cost_usd)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       new Date().toISOString(),
@@ -40,6 +52,8 @@ export function recordUsage(args: {
       args.model,
       args.inputTok,
       args.outputTok,
+      cacheCreation,
+      cacheRead,
       costUsd,
     );
   return { costUsd };

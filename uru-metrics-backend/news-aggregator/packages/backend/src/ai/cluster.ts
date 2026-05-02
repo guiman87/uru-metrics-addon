@@ -174,7 +174,7 @@ export async function runCluster(opts?: { providerName?: string }): Promise<Clus
         user: buildUserPrompt({ newArticles: batch, candidates, evergreens }),
         schema: ClusteringResponseSchema,
         model: config.llm.modelCluster,
-        maxOutputTokens: 4096,
+        maxOutputTokens: 2048,
         temperature: 0,
       });
       response = result.value;
