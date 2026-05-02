@@ -29,17 +29,14 @@ function shortHashOf(canonical: string[]): string {
   return h.slice(0, 6);
 }
 
-/**
- * Build a stable, SEO-friendly slug for a topic.
- * - evergreen: just slugify(label) — these are seeded with curated names.
- * - event/story: slugify(label) + 6-char keyword-set hash, so the same topic
- *   gets the same slug across runs even if the LLM rephrases the label.
- */
-export function buildSlug(label: string, keywords: string[], scope: TopicScope): string {
-  const base = slugify(label, { lower: true, strict: true, trim: true }) || 'topic';
-  if (scope === 'evergreen') return base;
-  const canonical = canonicalizeKeywords(keywords);
-  return `${base}-${shortHashOf(canonical)}`;
+/** slugify the label without any suffix. Used as the *preferred* clean slug. */
+export function baseSlugFor(label: string): string {
+  return slugify(label, { lower: true, strict: true, trim: true }) || 'topic';
+}
+
+/** Compute the canonical-keyword 6-char hash for a topic. */
+export function canonicalHashFor(keywords: string[]): string {
+  return shortHashOf(canonicalizeKeywords(keywords));
 }
 
 interface TopicRow {
@@ -113,15 +110,63 @@ export interface CreateTopicArgs {
   scope: TopicScope;
 }
 
+/**
+ * Create-or-reuse a topic. Slugs are clean by default (just slugify(label));
+ * a 6-char hex suffix is appended only when a different topic already owns
+ * the clean slug. Identity across runs is preserved via canonical-keyword
+ * hash aliases stored in topic_aliases under the prefix "hash:".
+ *
+ * Lookup order:
+ *   1. By "hash:<canonical>" alias — same canonical keywords as before.
+ *   2. By legacy "<base>-<hash>" slug — backfills the alias for next time
+ *      so old hash-suffixed topics created before this change still work.
+ *   3. By bare base slug, only if scope is evergreen OR the hash matches
+ *      (defends against incidental same-keyword topics).
+ *   4. Fall through to insert. Use bare slug if free, else "<base>-<hash>".
+ */
 export function createTopic(args: CreateTopicArgs): Topic {
   const now = new Date().toISOString();
-  const slug = buildSlug(args.label, args.keywords, args.scope);
-  // If slug collides (same canonical keywords reused across runs) reuse it.
-  const existing = findTopicBySlug(slug);
-  if (existing) {
-    touchTopic(existing.id);
-    return existing;
+  const canonical = canonicalizeKeywords(args.keywords);
+  const hash = shortHashOf(canonical);
+  const hashAlias = `hash:${hash}`;
+  const base = baseSlugFor(args.label);
+  const legacySlug = `${base}-${hash}`;
+
+  // 1. Same canonical-keyword set seen before → it's the same topic.
+  const existingByHash = findTopicByAlias(hashAlias);
+  if (existingByHash) {
+    touchTopic(existingByHash.id);
+    return existingByHash;
   }
+
+  // 2. Pre-migration topics carried the hash in their slug. Re-discover
+  //    them and lazily backfill the alias.
+  if (args.scope !== 'evergreen') {
+    const existingByLegacy = findTopicBySlug(legacySlug);
+    if (existingByLegacy) {
+      recordTopicAlias(hashAlias, existingByLegacy.id);
+      touchTopic(existingByLegacy.id);
+      return existingByLegacy;
+    }
+  }
+
+  // 3. Pick the slug. Prefer the clean base; if a different topic already
+  //    owns it (slugify collision), fall back to the hash-suffixed form.
+  let slug = base;
+  if (args.scope !== 'evergreen') {
+    const collision = findTopicBySlug(base);
+    if (collision) slug = legacySlug;
+  } else {
+    // Evergreens: bare slug. If something already owns it (shouldn't happen
+    // with curated seeds, but defend anyway), reuse rather than collide.
+    const collision = findTopicBySlug(base);
+    if (collision) {
+      touchTopic(collision.id);
+      return collision;
+    }
+  }
+
+  // 4. Insert.
   const info = getDb()
     .prepare(
       `INSERT INTO topics
@@ -132,13 +177,15 @@ export function createTopic(args: CreateTopicArgs): Topic {
       slug,
       label: args.label,
       description: args.description,
-      keywords_json: JSON.stringify(canonicalizeKeywords(args.keywords)),
+      keywords_json: JSON.stringify(canonical),
       parent_topic_id: args.parentTopicId,
       scope: args.scope,
       first_seen_at: now,
       last_seen_at: now,
     });
-  return findTopicById(Number(info.lastInsertRowid))!;
+  const newId = Number(info.lastInsertRowid);
+  recordTopicAlias(hashAlias, newId);
+  return findTopicById(newId)!;
 }
 
 export function touchTopic(id: number): void {
