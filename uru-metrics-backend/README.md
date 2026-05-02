@@ -2,6 +2,8 @@
 
 Runs the [`uru-metrics`](https://github.com/guiman87/uru-metrics) news-aggregator backend on your Home Assistant box: hourly Cheerio crawler for ~13 Uruguay news portals, two-stage LLM categorization + cross-source topic clustering, plus a public read-only JSON API consumed by the Next.js frontend.
 
+> **Heads up:** Home Assistant cannot pull from this repo because it's private. The addon is published as a public mirror at **https://github.com/guiman87/uru-metrics-addon**. Use that URL when adding the repository in HA. The `Dockerfile` in this folder is the *pre-mirror* version (clones the private repo) and is not the one HA will build — the mirror's Dockerfile is COPY-based and builds from local context. To publish a new version of the addon, run `scripts/sync-addon-repo.sh` from the private repo root.
+
 ## Install
 
 1. In Home Assistant, go to **Settings → Add-ons → Add-on Store → ⋮ menu → Repositories**.

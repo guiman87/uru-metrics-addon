@@ -245,6 +245,17 @@ topicsRoute.get('/:slug', (c) => {
   const topic = rowToTopic(row);
   const breadcrumbs = buildBreadcrumbs(topic);
 
+  // Latest importance score for this topic — same source as the home list.
+  // Returns 0 for evergreen topics or topics that haven't been scored yet.
+  const scoreRow = getDb()
+    .prepare<[number], { importance: number | null }>(
+      `SELECT importance FROM topic_scores
+       WHERE topic_id = ? AND window_hours = 24
+       ORDER BY computed_at DESC LIMIT 1`,
+    )
+    .get(topic.id);
+  const importance = scoreRow?.importance ?? 0;
+
   let descendants: Array<{ id: number; slug: string; label: string; scope: TopicScope; articleCount: number }> = [];
   if (topic.scope === 'evergreen') {
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -319,7 +330,7 @@ topicsRoute.get('/:slug', (c) => {
   }));
 
   return c.json({
-    topic: { ...topic, breadcrumbs },
+    topic: { ...topic, breadcrumbs, importance },
     descendants,
     articles,
   });
