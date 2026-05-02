@@ -1,27 +1,26 @@
 # uru-metrics backend (Home Assistant addon)
 
-Runs the [`uru-metrics`](https://github.com/guiman87/uru-metrics) news-aggregator backend on your Home Assistant box: hourly Cheerio crawler for ~13 Uruguay news portals, two-stage LLM categorization + cross-source topic clustering, plus a public read-only JSON API consumed by the Next.js frontend.
-
-> **Heads up:** Home Assistant cannot pull from this repo because it's private. The addon is published as a public mirror at **https://github.com/guiman87/uru-metrics-addon**. Use that URL when adding the repository in HA. The `Dockerfile` in this folder is the *pre-mirror* version (clones the private repo) and is not the one HA will build — the mirror's Dockerfile is COPY-based and builds from local context. To publish a new version of the addon, run `scripts/sync-addon-repo.sh` from the private repo root.
+Runs the **uru-metrics** news-aggregator backend on your Home Assistant box: hourly Cheerio crawler for ~13 Uruguay news portals, two-stage LLM categorization + cross-source topic clustering, plus a public read-only JSON API consumed by the Next.js frontend.
 
 ## Install
 
 1. In Home Assistant, go to **Settings → Add-ons → Add-on Store → ⋮ menu → Repositories**.
 2. Add `https://github.com/guiman87/uru-metrics-addon`.
-3. The **uru-metrics backend** addon appears under "Local add-ons" or as a new repo card. Click → **Install**.
+3. The **uru-metrics backend** addon appears as a new repo card. Click → **Install**.
 4. After install, go to **Configuration**:
    - **`llm_provider`**: `claude` (recommended), `gemini`, `openai`, or `stub` (no API spend, deterministic mock for testing).
    - **`anthropic_api_key`** (or `google_api_key` / `openai_api_key`): only the key for the chosen provider is required.
    - **`llm_max_usd_per_day`**: hard daily spend ceiling. The provider wrapper refuses calls past this. Default `5`.
-   - **`cors_origins`**: comma-separated list of frontend origins allowed to consume the API. Add your Netlify URL here.
-5. Click **Start**, then **Open Web UI** if exposed, or `curl http://homeassistant.local:3000/api/health`.
+   - **`cors_origins`**: list of frontend origins allowed to consume the API. Add your Netlify URL here.
+   - **`netlify_build_hook_url`** (optional): URL of a Netlify build hook. After every successful ingest the backend POSTs to it so Netlify rebuilds the static site with fresh data.
+5. Click **Start**, then check the addon log for `[server] Listening on http://0.0.0.0:3000`.
 
 ## Public exposure
 
 The addon listens on internal port `3000`. To make the API publicly reachable for your Netlify frontend, add **one** of:
 
-- **Cloudflare Tunnel addon** *(recommended)* — install the official `Cloudflared` addon, point a tunnel at `http://addon_uru-metrics-backend:3000`, choose a hostname like `api.urumetrics.<your-domain>`. Free WAF + edge cache, no port-forward, hides your home IP.
-- **Port-forward + reverse proxy** — open `:443` on your router, point it at HA's `NGINX Proxy Manager` addon, set up Let's Encrypt for `api.urumetrics.<your-domain>` upstreaming to `http://addon_uru-metrics-backend:3000`.
+- **Cloudflare Tunnel addon** *(recommended)* — install the `Cloudflared` addon, configure a tunnel pointing at `http://4d2be31a-uru-metrics-backend:3000`, choose a hostname like `api.urumetrics.<your-domain>`. Free WAF + edge cache, no port-forward, hides your home IP.
+- **Port-forward + reverse proxy** — open `:443` on your router, point it at HA's `NGINX Proxy Manager` addon, set up Let's Encrypt for `api.urumetrics.<your-domain>` upstreaming to the same internal hostname.
 
 Once exposed, set `NEXT_PUBLIC_API_BASE_URL` in your Netlify environment to `https://api.urumetrics.<your-domain>` and rebuild the frontend.
 
@@ -45,10 +44,7 @@ After every successful ingest with new articles or topic changes, the backend PO
 
 ## Updating
 
-The addon clones the GitHub repo at build time. To pull new code:
-
-1. Push to `main` on `guiman87/uru-metrics`.
-2. In the addon: **⋮ menu → Rebuild** (or change `git_ref` to a specific commit/tag).
+The addon is a public mirror of the source-of-truth project at `guiman87/uru-metrics` (private). To pull new code, the maintainer runs `scripts/sync-addon-repo.sh` in the private repo, which copies the latest backend + shared workspaces into this mirror, regenerates the lockfile, commits and pushes. After that, in Home Assistant: **uru-metrics backend** addon → ⋮ menu → **Rebuild**.
 
 ## Resources
 
