@@ -7,7 +7,7 @@ import { recordUsage } from './usage.js';
 // line, which our prompt builders set to a stable identifier.
 //
 // Recognized markers (the prompts include these in the very first line):
-//   [stage:categorize]  → ArticleExtraction
+//   [stage:categorize]  → BatchedArticleExtraction
 //   [stage:cluster]     → ClusteringResponse
 //   [stage:salience]    → TopicSalience
 
@@ -43,23 +43,40 @@ function pickEvergreenParent(keywords: string[]): { id: number; slug: string } |
   return { id: -1, slug: 'general' };
 }
 
-function fakeCategorize(user: string): {
+interface StubExtraction {
+  articleId: number;
   entities: string[];
   keywords: string[];
   summary: string;
   categoryHint: string | null;
-} {
-  // The user message follows the shape "Article: <headline>\n\n<content>".
-  // We just want stable, schema-valid output.
-  const firstLine = user.split('\n').find((l) => l.trim().length > 0) ?? '';
-  const headline = firstLine.replace(/^Article:\s*/i, '').slice(0, 200);
-  const keywords = topKeywords(`${headline} ${user.slice(0, 1500)}`, 6);
-  return {
-    entities: keywords.slice(0, 3).map((k) => k.charAt(0).toUpperCase() + k.slice(1)),
-    keywords,
-    summary: headline.slice(0, 280) || 'Resumen no disponible (stub).',
-    categoryHint: null,
-  };
+}
+
+function fakeCategorize(user: string): { extractions: StubExtraction[] } {
+  // The user prompt is a JSON array: [{ articleId, headline, content }, ...].
+  // Parse it; on any malformed input fall back to empty so the schema still
+  // validates and the pipeline records "LLM dropped all articles".
+  let batch: Array<{ articleId: number; headline?: string; content?: string }> = [];
+  try {
+    const parsed = JSON.parse(user);
+    if (Array.isArray(parsed)) batch = parsed;
+  } catch {
+    /* fall through */
+  }
+  const extractions = batch.map((item) => {
+    const headline = (item.headline ?? '').slice(0, 200);
+    const content = (item.content ?? '').slice(0, 1500);
+    const keywords = topKeywords(`${headline} ${content}`, 6);
+    // Ensure the schema's min(3) keywords floor is met even on tiny inputs.
+    while (keywords.length < 3) keywords.push(`stub${keywords.length}`);
+    return {
+      articleId: item.articleId,
+      entities: keywords.slice(0, 3).map((k) => k.charAt(0).toUpperCase() + k.slice(1)),
+      keywords,
+      summary: headline.slice(0, 280) || 'Resumen no disponible (stub).',
+      categoryHint: null,
+    };
+  });
+  return { extractions };
 }
 
 function fakeCluster(user: string): {

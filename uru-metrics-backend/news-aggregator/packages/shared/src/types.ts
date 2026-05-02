@@ -147,13 +147,20 @@ export interface LlmProvider {
 
 // ─── AI pipeline shapes ───────────────────────────────────────────────────
 
-export const ArticleExtractionSchema = z.object({
-  entities: z.array(z.string()).max(50),
-  keywords: z.array(z.string()).min(3).max(15),
-  summary: z.string().max(400),
-  categoryHint: z.string().nullable().optional(),
+// Batched extraction: the LLM is sent N articles per call and must return one
+// entry per articleId. `articleId` ties each result back to its source row.
+export const BatchedArticleExtractionSchema = z.object({
+  extractions: z.array(
+    z.object({
+      articleId: z.number(),
+      entities: z.array(z.string()).max(50),
+      keywords: z.array(z.string()).min(3).max(15),
+      summary: z.string().max(400),
+      categoryHint: z.string().nullable().optional(),
+    }),
+  ),
 });
-export type ArticleExtraction = z.infer<typeof ArticleExtractionSchema>;
+export type BatchedArticleExtraction = z.infer<typeof BatchedArticleExtractionSchema>;
 
 export const ClusteringAssignmentSchema = z.object({
   articleId: z.number(),

@@ -4,6 +4,7 @@ import { getDb } from '../db/client.js';
 import { config } from '../config.js';
 import { getProvider } from './provider.js';
 import {
+  canonicalizeKeywords,
   createTopic,
   findTopicById,
   findTopicByAlias,
@@ -18,6 +19,16 @@ import { CostCapExceededError } from './usage.js';
 
 const BATCH_SIZE = 20; // articles per LLM call — keeps prompts under ~10k tokens
 const ASSIGNED_LOOKBACK_DAYS = 7;
+
+// Confidence we assign to articles auto-matched by keyword overlap. Below the
+// LLM's typical 0.85+ for clear matches but well above the 0.5 fallback floor,
+// so heuristic matches are visibly distinguishable in article_topics.
+const HEURISTIC_CONFIDENCE = 0.75;
+// Jaccard similarity threshold for the heuristic short-circuit. ≥0.5 means the
+// article shares the majority of its (canonicalized) keywords with one topic
+// — a high bar that avoids false positives at the cost of leaving ambiguous
+// cases for the LLM. Tune downward only after measuring quality.
+const JACCARD_THRESHOLD = 0.5;
 
 const SYSTEM_PROMPT = `[stage:cluster]
 Sos editor jefe de un agregador de noticias uruguayo. Tu tarea es agrupar nuevos artículos en tópicos.
@@ -47,8 +58,10 @@ interface ArticleForClustering {
 }
 
 interface ClusterStats {
-  batches: number;
+  batches: number; // batches inspected (LLM call may have been skipped)
+  llmBatches: number; // batches that actually issued an LLM call
   articlesAssigned: number;
+  articlesAutoMatched: number; // assigned via Jaccard short-circuit, no LLM
   articlesFailed: number;
   topicsCreated: number;
   topicsReused: number;
@@ -117,6 +130,55 @@ function buildUserPrompt(args: {
   );
 }
 
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const k of a) if (b.has(k)) intersection += 1;
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
+/**
+ * Find the single best-matching candidate for an article via canonical-keyword
+ * Jaccard similarity. Returns the topic only if exactly one candidate clears
+ * JACCARD_THRESHOLD — ambiguous cases (no match, or multiple matches) fall
+ * through to the LLM where a model judgment is more useful than a tiebreak.
+ */
+function findUnambiguousCandidate(
+  articleKeywords: Set<string>,
+  candidates: Topic[],
+): Topic | null {
+  let above: { topic: Topic; score: number } | null = null;
+  let aboveCount = 0;
+  for (const topic of candidates) {
+    const topicSet = new Set(canonicalizeKeywords(topic.keywords));
+    const score = jaccard(articleKeywords, topicSet);
+    if (score >= JACCARD_THRESHOLD) {
+      aboveCount += 1;
+      if (!above || score > above.score) above = { topic, score };
+    }
+  }
+  return aboveCount === 1 && above ? above.topic : null;
+}
+
+/**
+ * Restrict the candidate set sent to the LLM to topics that share at least one
+ * canonical keyword with any article in the batch. Drops topics that have zero
+ * lexical overlap — they're essentially never the right answer for the batch
+ * and just consume input tokens.
+ */
+function filterRelevantCandidates(
+  candidates: Topic[],
+  batchKeywordUnion: Set<string>,
+): Topic[] {
+  if (batchKeywordUnion.size === 0) return candidates;
+  return candidates.filter((topic) => {
+    const topicSet = canonicalizeKeywords(topic.keywords);
+    for (const k of topicSet) if (batchKeywordUnion.has(k)) return true;
+    return false;
+  });
+}
+
 /**
  * Resolve a parentTopicId returned by the LLM. Falls back gracefully:
  *  - exact id match → use it
@@ -140,7 +202,9 @@ function resolveParentTopicId(args: {
 export async function runCluster(opts?: { providerName?: string }): Promise<ClusterStats> {
   const stats: ClusterStats = {
     batches: 0,
+    llmBatches: 0,
     articlesAssigned: 0,
+    articlesAutoMatched: 0,
     articlesFailed: 0,
     topicsCreated: 0,
     topicsReused: 0,
@@ -165,13 +229,59 @@ export async function runCluster(opts?: { providerName?: string }): Promise<Clus
 
   for (let i = 0; i < articles.length; i += BATCH_SIZE) {
     const batch = articles.slice(i, i + BATCH_SIZE);
+    stats.batches += 1;
     const candidates = getActiveCandidateTopics(ASSIGNED_LOOKBACK_DAYS);
+
+    // Heuristic short-circuit: articles whose canonical keywords overlap
+    // (Jaccard ≥ JACCARD_THRESHOLD) with exactly one candidate get assigned
+    // directly without an LLM call. Ambiguous cases (no match, or multiple
+    // matches) fall through to the model.
+    const remaining: ArticleForClustering[] = [];
+    for (const article of batch) {
+      const articleKeywords = new Set(canonicalizeKeywords(article.keywords));
+      const match = findUnambiguousCandidate(articleKeywords, candidates);
+      if (match) {
+        linkArticleToTopic({
+          articleId: article.id,
+          topicId: match.id,
+          confidence: HEURISTIC_CONFIDENCE,
+          isPrimary: true,
+        });
+        touchTopic(match.id);
+        stats.articlesAssigned += 1;
+        stats.articlesAutoMatched += 1;
+        stats.topicsReused += 1;
+      } else {
+        remaining.push(article);
+      }
+    }
+
+    if (remaining.length === 0) {
+      console.log(
+        `[cluster] Batch ${stats.batches}: ${batch.length} auto-matched, no LLM call.`,
+      );
+      continue;
+    }
+
+    // Pre-filter the candidate set passed to the LLM: keep only topics that
+    // share at least one canonical keyword with any remaining article. Drops
+    // topics with zero lexical overlap — they're almost never the right
+    // answer for the batch and just consume input tokens.
+    const batchKeywordUnion = new Set<string>();
+    for (const article of remaining) {
+      for (const k of canonicalizeKeywords(article.keywords)) batchKeywordUnion.add(k);
+    }
+    const relevantCandidates = filterRelevantCandidates(candidates, batchKeywordUnion);
 
     let response;
     try {
       const result = await provider.generateJson({
         system: SYSTEM_PROMPT,
-        user: buildUserPrompt({ newArticles: batch, candidates, evergreens }),
+        user: buildUserPrompt({
+          newArticles: remaining,
+          candidates: relevantCandidates,
+          evergreens,
+        }),
         schema: ClusteringResponseSchema,
         model: config.llm.modelCluster,
         maxOutputTokens: 2048,
@@ -184,15 +294,14 @@ export async function runCluster(opts?: { providerName?: string }): Promise<Clus
         console.warn(`[cluster] Cap hit, stopping: ${err.message}`);
         break;
       }
-      stats.articlesFailed += batch.length;
-      console.warn(`[cluster] Batch ${stats.batches + 1} failed: ${(err as Error).message}`);
-      stats.batches += 1;
+      stats.articlesFailed += remaining.length;
+      console.warn(`[cluster] Batch ${stats.batches} failed: ${(err as Error).message}`);
       continue;
     }
-    stats.batches += 1;
+    stats.llmBatches += 1;
 
     for (const a of response.assignments) {
-      const article = batch.find((x) => x.id === a.articleId);
+      const article = remaining.find((x) => x.id === a.articleId);
       if (!article) continue;
 
       let topicId: number | null = null;
@@ -254,12 +363,12 @@ export async function runCluster(opts?: { providerName?: string }): Promise<Clus
     }
 
     console.log(
-      `[cluster] Batch ${stats.batches}: assigned=${stats.articlesAssigned}, created=${stats.topicsCreated}, reused=${stats.topicsReused}`,
+      `[cluster] Batch ${stats.batches}: llm=${remaining.length}/${batch.length} candidates=${relevantCandidates.length}/${candidates.length} (running totals: assigned=${stats.articlesAssigned} auto=${stats.articlesAutoMatched} created=${stats.topicsCreated} reused=${stats.topicsReused})`,
     );
   }
 
   console.log(
-    `[cluster] Done: assigned=${stats.articlesAssigned}, failed=${stats.articlesFailed}, topics created=${stats.topicsCreated}, reused=${stats.topicsReused}${stats.capHit ? ', CAP HIT' : ''}`,
+    `[cluster] Done: assigned=${stats.articlesAssigned} (auto=${stats.articlesAutoMatched}), failed=${stats.articlesFailed}, llm-batches=${stats.llmBatches}/${stats.batches}, topics created=${stats.topicsCreated}, reused=${stats.topicsReused}${stats.capHit ? ', CAP HIT' : ''}`,
   );
   return stats;
 }
