@@ -18,6 +18,10 @@ const listQuery = z.object({
   window: z.enum(['24h']).optional().default('24h'),
   limit: z.coerce.number().int().min(1).max(200).optional().default(50),
   scope: z.enum(['evergreen', 'event', 'story']).optional().default('story'),
+  // Hide topics with fewer than `minSources` outlets covering them in the
+  // 24h window. Default 1 (no filter) for backward compatibility; the home
+  // page passes 2 so single-source noise stays off the consensus feed.
+  minSources: z.coerce.number().int().min(1).max(20).optional().default(1),
 });
 
 interface RankedTopicRow {
@@ -131,7 +135,7 @@ export const topicsRoute = new Hono();
 
 // ─── GET /api/topics — ranked list ─────────────────────────────────────────
 topicsRoute.get('/', zValidator('query', listQuery), (c) => {
-  const { limit, scope } = c.req.valid('query');
+  const { limit, scope, minSources } = c.req.valid('query');
   const computedAt = getLatestComputedAt();
 
   if (scope === 'evergreen') {
@@ -178,8 +182,11 @@ topicsRoute.get('/', zValidator('query', listQuery), (c) => {
   // used by fetchTopArticles. Without this, topic_scores stays at a snapshot
   // taken at the last score run, and articles aging out of the window cause
   // the displayed "X fuentes" to disagree with the chip strip.
+  // The `minSources` filter (default 1) lets callers hide topics covered by
+  // fewer than N outlets — the home page passes 2 to suppress single-source
+  // noise from the consensus feed.
   const rows = getDb()
-    .prepare<[string, TopicScope, number], RankedTopicRow>(
+    .prepare<[string, TopicScope, number, number], RankedTopicRow>(
       `SELECT
          t.id                       AS topic_id,
          t.slug                     AS slug,
@@ -203,11 +210,11 @@ topicsRoute.get('/', zValidator('query', listQuery), (c) => {
        ) live ON live.topic_id = ts.topic_id
        WHERE ts.computed_at = (SELECT MAX(computed_at) FROM topic_scores WHERE window_hours = 24)
          AND t.scope = ?
-         AND COALESCE(live.src_count, 0) > 0
+         AND COALESCE(live.src_count, 0) >= ?
        ORDER BY ts.importance DESC
        LIMIT ?`,
     )
-    .all(cutoffIso(), scope, limit);
+    .all(cutoffIso(), scope, minSources, limit);
 
   const body: TopicListResponse = {
     computedAt: computedAt ?? new Date().toISOString(),
