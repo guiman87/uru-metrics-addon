@@ -47,9 +47,11 @@ export function recordUsage(args: {
 
 /**
  * Throws CostCapExceededError if today's logged spend already meets/exceeds the cap.
- * Call before issuing a new LLM request.
+ * Call before issuing a new LLM request. When config.llm.capEnabled is false,
+ * the check is skipped (spend is still recorded; the cap just isn't enforced).
  */
 export function assertUnderDailyCap(): void {
+  if (!config.llm.capEnabled) return;
   const spent = getDailyCostUsd();
   if (spent >= config.llm.maxUsdPerDay) {
     throw new CostCapExceededError(spent, config.llm.maxUsdPerDay);

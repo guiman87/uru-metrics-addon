@@ -29,6 +29,7 @@ options:
   llm_provider: stub
   llm_model_categorize: claude-haiku-4-5-20251001
   llm_model_cluster: claude-sonnet-4-6
+  llm_cost_cap_enabled: true
   llm_max_usd_per_day: 5
   anthropic_api_key: ""
   google_api_key: ""
@@ -43,6 +44,9 @@ schema:
   llm_provider: list(claude|gemini|openai|stub)
   llm_model_categorize: str
   llm_model_cluster: str
+  # When false, the daily cap is recorded but not enforced — useful for one-off
+  # bursts (full re-categorize, fresh ingest after adding sources, etc.).
+  llm_cost_cap_enabled: bool
   llm_max_usd_per_day: float(0,)
   anthropic_api_key: password?
   google_api_key: password?

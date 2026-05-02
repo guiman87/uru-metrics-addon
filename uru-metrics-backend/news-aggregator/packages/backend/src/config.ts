@@ -39,6 +39,10 @@ export const config = {
     modelCategorize: envStr('LLM_MODEL_CATEGORIZE', 'claude-haiku-4-5-20251001'),
     modelCluster: envStr('LLM_MODEL_CLUSTER', 'claude-sonnet-4-6'),
     maxUsdPerDay: envNum('LLM_MAX_USD_PER_DAY', 5),
+    // When false, the daily cap is logged but never enforced. Useful for
+    // bursts (full re-categorize after a schema change, fresh ingest after
+    // adding many sources, etc.) where you'd rather pay than skip.
+    capEnabled: (process.env.LLM_COST_CAP_ENABLED ?? 'true').toLowerCase() !== 'false',
     anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
     googleApiKey: process.env.GOOGLE_API_KEY ?? '',
     openaiApiKey: process.env.OPENAI_API_KEY ?? '',

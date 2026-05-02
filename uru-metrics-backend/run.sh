@@ -8,6 +8,8 @@ export LLM_PROVIDER="$(bashio::config 'llm_provider')"
 export LLM_MODEL_CATEGORIZE="$(bashio::config 'llm_model_categorize')"
 export LLM_MODEL_CLUSTER="$(bashio::config 'llm_model_cluster')"
 export LLM_MAX_USD_PER_DAY="$(bashio::config 'llm_max_usd_per_day')"
+# Bashio returns 'true'/'false' for bool options as plain strings.
+export LLM_COST_CAP_ENABLED="$(bashio::config 'llm_cost_cap_enabled')"
 
 if bashio::config.has_value 'anthropic_api_key'; then
   export ANTHROPIC_API_KEY="$(bashio::config 'anthropic_api_key')"
@@ -35,7 +37,11 @@ export HOST=0.0.0.0
 export TZ_DISPLAY="America/Montevideo"
 
 bashio::log.info "Provider: ${LLM_PROVIDER}"
-bashio::log.info "Daily cap: \$${LLM_MAX_USD_PER_DAY}"
+if [ "${LLM_COST_CAP_ENABLED}" = "true" ]; then
+  bashio::log.info "Daily cap: \$${LLM_MAX_USD_PER_DAY} (enforced)"
+else
+  bashio::log.warning "Daily cap: DISABLED — spending is logged but not capped"
+fi
 bashio::log.info "DB:       ${DB_PATH}"
 bashio::log.info "CORS:     ${CORS_ORIGINS}"
 
