@@ -1,6 +1,6 @@
 ---
 name: uru-metrics backend
-version: "0.1.0"
+version: "0.2.0"
 slug: uru-metrics-backend
 description: >-
   News aggregator backend for uru-metrics. Crawls Uruguay news portals
