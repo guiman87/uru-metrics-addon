@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getDb, closeDb } from './client.js';
 import { sources } from '../ingest/sources.js';
+import { cleanSlugs } from '../../scripts/clean-slugs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -49,6 +50,16 @@ function upsertSources(): void {
 function main(): void {
   applySchema();
   upsertSources();
+
+  // Migrate topic slugs from "<base>-<hash>" to bare "<base>" wherever
+  // there's no collision. Idempotent — only does work once per topic.
+  const slugStats = cleanSlugs();
+  if (slugStats.renamed > 0 || slugStats.aliasesAdded > 0) {
+    console.log(
+      `[migrate] clean-slugs: renamed=${slugStats.renamed} aliases-added=${slugStats.aliasesAdded} collisions-skipped=${slugStats.skippedCollision}`,
+    );
+  }
+
   closeDb();
   console.log('[migrate] Done.');
 }

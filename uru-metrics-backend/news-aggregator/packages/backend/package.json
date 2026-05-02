@@ -11,6 +11,7 @@
     "ingest:once": "tsx src/jobs/run-once.ts",
     "cron": "tsx src/jobs/hourly.ts",
     "seed:evergreen": "tsx scripts/seed-evergreen.ts",
+    "clean-slugs": "tsx scripts/clean-slugs.ts",
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
