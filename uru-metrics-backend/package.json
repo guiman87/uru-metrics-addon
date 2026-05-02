@@ -1,0 +1,18 @@
+{
+  "name": "uru-metrics-addon",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Home Assistant addon for the uru-metrics news aggregator backend.",
+  "workspaces": [
+    "news-aggregator/packages/shared",
+    "news-aggregator/packages/backend"
+  ],
+  "scripts": {
+    "migrate": "npm run migrate --workspace=@uru/backend",
+    "seed:evergreen": "npm run seed:evergreen --workspace=@uru/backend",
+    "start:all": "npm run start:all --workspace=@uru/backend"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

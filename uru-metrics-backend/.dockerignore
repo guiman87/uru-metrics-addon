@@ -1,0 +1,10 @@
+node_modules/
+**/node_modules/
+**/dist/
+**/data/*
+!**/data/.gitkeep
+**/*.db
+**/*.db-shm
+**/*.db-wal
+.git/
+README.md

@@ -1,0 +1,52 @@
+---
+name: uru-metrics backend
+version: "0.1.0"
+slug: uru-metrics-backend
+description: >-
+  News aggregator backend for uru-metrics. Crawls Uruguay news portals
+  hourly, categorizes & clusters articles by topic with LLM, exposes a
+  read-only public API consumed by the Next.js frontend.
+url: https://github.com/guiman87/uru-metrics
+arch:
+  - aarch64
+  - amd64
+startup: services
+boot: auto
+init: false
+hassio_role: default
+hassio_api: false
+homeassistant_api: false
+host_network: false
+ports:
+  3000/tcp: 3000
+ports_description:
+  3000/tcp: HTTP API. Expose publicly via the Cloudflared addon (recommended) or NGINX Proxy Manager.
+options:
+  llm_provider: stub
+  llm_model_categorize: claude-haiku-4-5-20251001
+  llm_model_cluster: claude-sonnet-4-6
+  llm_max_usd_per_day: 5
+  anthropic_api_key: ""
+  google_api_key: ""
+  openai_api_key: ""
+  admin_token: ""
+  cors_origins:
+    - "http://localhost:3001"
+    - "https://urumetrics.netlify.app"
+  netlify_build_hook_url: ""
+  git_ref: main
+schema:
+  llm_provider: list(claude|gemini|openai|stub)
+  llm_model_categorize: str
+  llm_model_cluster: str
+  llm_max_usd_per_day: float(0,)
+  anthropic_api_key: password?
+  google_api_key: password?
+  openai_api_key: password?
+  admin_token: password?
+  cors_origins:
+    - str
+  netlify_build_hook_url: url?
+  git_ref: str
+map:
+  - share:rw
