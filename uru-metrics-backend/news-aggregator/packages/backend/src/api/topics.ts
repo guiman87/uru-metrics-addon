@@ -208,6 +208,15 @@ topicsRoute.get('/', zValidator('query', listQuery), (c) => {
     // Evergreens don't have topic_scores; rank by descendant article count
     // in the last 24h.
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    // Evergreen ranking. Two flavors share the query:
+    //   non-entity vertical (parent of events/stories) → article count
+    //     comes from descendants' primary-linked articles.
+    //   entity-evergreen (leaf, entity_type != null) → count comes from
+    //     articles directly linked via the entity-link step (is_primary=0).
+    // Drop the is_primary filter on the join so both flavors are counted,
+    // and use COUNT(DISTINCT a.id) so an article that's BOTH primary-linked
+    // to a story under a vertical AND entity-linked to an entity under the
+    // same vertical is only counted once for that vertical.
     const rows = getDb()
       .prepare<[string, string, number], RankedTopicRow>(
         `WITH RECURSIVE descendants(root_id, descendant_id) AS (
@@ -216,18 +225,18 @@ topicsRoute.get('/', zValidator('query', listQuery), (c) => {
            SELECT d.root_id, t.id FROM topics t JOIN descendants d ON t.parent_topic_id = d.descendant_id
          )
          SELECT
-           t.id           AS topic_id,
-           t.slug         AS slug,
-           t.label        AS label,
-           t.scope        AS scope,
+           t.id              AS topic_id,
+           t.slug            AS slug,
+           t.label           AS label,
+           t.scope           AS scope,
            t.parent_topic_id AS parent_topic_id,
-           1.0            AS importance,
+           1.0               AS importance,
            COUNT(DISTINCT a.domain) AS source_count,
-           COUNT(*)       AS article_count,
-           ?              AS computed_at
+           COUNT(DISTINCT a.id)     AS article_count,
+           ?                 AS computed_at
          FROM topics t
          LEFT JOIN descendants d ON d.root_id = t.id
-         LEFT JOIN article_topics at ON at.topic_id = d.descendant_id AND at.is_primary = 1
+         LEFT JOIN article_topics at ON at.topic_id = d.descendant_id
          LEFT JOIN articles a ON a.id = at.article_id AND a.published_at >= ?
          WHERE t.scope = 'evergreen'
          GROUP BY t.id
@@ -364,28 +373,49 @@ topicsRoute.get('/:slug', (c) => {
       }));
   }
 
-  // Articles directly assigned (or inherited via descendants for evergreen).
-  // Detail-handler query carries `summary` so the topic page can render the
-  // LLM-generated blurb with attribution under each headline.
+  // Articles for the topic page. Three scopes, three semantics:
+  //
+  //   entity-evergreen  → articles directly linked via the entity-link
+  //                       step (always is_primary=0). No tree expansion;
+  //                       these topics are leaves.
+  //   non-entity evergreen (vertical) → walk the descendants tree (its
+  //                       child events/stories own the actual articles
+  //                       with is_primary=1) AND include direct entity
+  //                       links so an article that's primary-linked to
+  //                       a story under this vertical AND entity-linked
+  //                       to one of its entity-children is counted once.
+  //                       DISTINCT a.id deduplicates.
+  //   event / story    → direct primary link only.
+  //
+  // Detail-handler query carries `summary` so the topic page can render
+  // the LLM-generated blurb with attribution under each headline.
   const articles = (topic.scope === 'evergreen'
-    ? getDb()
-        .prepare<
-          [number],
-          ArticleSnippetRow
-        >(
-          `WITH RECURSIVE tree(id) AS (
-             SELECT id FROM topics WHERE id = ?
-             UNION ALL
-             SELECT t.id FROM topics t JOIN tree x ON t.parent_topic_id = x.id
-           )
-           SELECT DISTINCT a.id, a.domain, a.headline, a.url, a.published_at, a.image_url, a.summary
-           FROM article_topics at
-           JOIN articles a ON a.id = at.article_id
-           WHERE at.topic_id IN (SELECT id FROM tree) AND at.is_primary = 1
-           ORDER BY a.published_at DESC
-           LIMIT 100`,
-        )
-        .all(topic.id)
+    ? topic.entityType !== null
+      ? getDb()
+          .prepare<[number], ArticleSnippetRow>(
+            `SELECT a.id, a.domain, a.headline, a.url, a.published_at, a.image_url, a.summary
+             FROM article_topics at
+             JOIN articles a ON a.id = at.article_id
+             WHERE at.topic_id = ?
+             ORDER BY a.published_at DESC
+             LIMIT 100`,
+          )
+          .all(topic.id)
+      : getDb()
+          .prepare<[number], ArticleSnippetRow>(
+            `WITH RECURSIVE tree(id) AS (
+               SELECT id FROM topics WHERE id = ?
+               UNION ALL
+               SELECT t.id FROM topics t JOIN tree x ON t.parent_topic_id = x.id
+             )
+             SELECT DISTINCT a.id, a.domain, a.headline, a.url, a.published_at, a.image_url, a.summary
+             FROM article_topics at
+             JOIN articles a ON a.id = at.article_id
+             WHERE at.topic_id IN (SELECT id FROM tree)
+             ORDER BY a.published_at DESC
+             LIMIT 100`,
+          )
+          .all(topic.id)
     : getDb()
         .prepare<
           [number],

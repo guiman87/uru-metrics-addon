@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { getProvider } from '../ai/provider.js';
+import { linkArticlesToEntityEvergreens } from '../ai/link-entities.js';
 import {
   promoteEntities,
   scanEntities,
@@ -139,5 +140,27 @@ adminRoute.post('/promote/apply', async (c) => {
     provider,
     model: body?.model ?? config.llm.modelCategorize,
   });
+  return c.json(stats);
+});
+
+const linkBody = z
+  .object({
+    daysBack: z.number().int().min(1).max(365).optional(),
+  })
+  .optional();
+
+// POST /api/admin/promote/link — runs the article ↔ entity-evergreen
+// linking pass on demand. Cluster step does this every ingest tick, so
+// the operator only needs this immediately after promote/apply (to
+// populate the new entity-evergreens before the next cron fires).
+adminRoute.post('/promote/link', async (c) => {
+  let body: z.infer<typeof linkBody> = undefined;
+  try {
+    const raw = await c.req.json();
+    body = linkBody.parse(raw);
+  } catch {
+    /* empty / invalid body — use defaults */
+  }
+  const stats = linkArticlesToEntityEvergreens(body);
   return c.json(stats);
 });
