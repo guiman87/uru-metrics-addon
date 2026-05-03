@@ -5,6 +5,7 @@ import { logger } from 'hono/logger';
 import { config } from './config.js';
 import { healthRoute } from './api/health.js';
 import { articlesRoute } from './api/articles.js';
+import { searchRoute } from './api/search.js';
 import { sourcesRoute } from './api/sources.js';
 import { topicsRoute } from './api/topics.js';
 
@@ -25,6 +26,7 @@ app.get('/', (c) => c.text('uru-metrics / news-aggregator API\n'));
 
 app.route('/api/health', healthRoute);
 app.route('/api/articles', articlesRoute);
+app.route('/api/search', searchRoute);
 app.route('/api/sources', sourcesRoute);
 app.route('/api/topics', topicsRoute);
 

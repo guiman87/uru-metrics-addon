@@ -24,6 +24,14 @@ interface ArticleRow {
 
 export const articlesRoute = new Hono();
 
+// Articles can come in at any time within the hour. Cache short — 60 s
+// fresh, 5 min stale-while-revalidate — so a sudden burst doesn't hammer
+// the DB but the feed still feels live.
+articlesRoute.use('*', async (c, next) => {
+  await next();
+  c.header('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
+});
+
 articlesRoute.get('/', zValidator('query', querySchema), (c) => {
   const { since, domain, limit } = c.req.valid('query');
   const where: string[] = [];

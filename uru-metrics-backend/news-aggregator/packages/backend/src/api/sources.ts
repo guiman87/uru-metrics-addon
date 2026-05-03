@@ -16,6 +16,13 @@ interface SourceRow {
 
 export const sourcesRoute = new Hono();
 
+// Source list rarely changes (we add a publisher every few weeks at most).
+// Edge can hold for 1 h, keep stale for 24 h.
+sourcesRoute.use('*', async (c, next) => {
+  await next();
+  c.header('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
+});
+
 sourcesRoute.get('/', (c) => {
   const rows = getDb()
     .prepare<[], SourceRow>('SELECT * FROM sources ORDER BY domain')

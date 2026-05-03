@@ -3,16 +3,67 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { getDb } from '../db/client.js';
 import type {
+  Cobertura,
   Topic,
   TopicListItem,
   TopicListResponse,
+  TopicTrend,
   TopicScope,
 } from '@uru/shared';
 
 const TOP_ARTICLES_PER_TOPIC = 5;
 const WINDOW_HOURS = 24;
+const TREND_LOOKBACK_HOURS = 6;
+// Below this magnitude we render trend as 'flat' so the UI can suppress it.
+// Picked at 5% — small enough to catch real movement on a noisy hourly score,
+// large enough to ignore the rounding jitter on slow-moving topics.
+const TREND_FLAT_THRESHOLD_PCT = 5;
+// Cobertura band thresholds. 'amplia' kicks in at 70% of active outlets so
+// even with one or two missing sources a story still reads as broadly
+// covered. 'acotada' caps at 3 to flag genuinely narrow pickup.
+const COBERTURA_AMPLIA_RATIO = 0.7;
+const COBERTURA_ACOTADA_MAX = 3;
+
 const cutoffIso = () =>
   new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString();
+const trendLookbackIso = () =>
+  new Date(Date.now() - TREND_LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
+
+function activeSourceCount(): number {
+  const r = getDb()
+    .prepare<[], { n: number }>(
+      `SELECT COUNT(*) AS n FROM sources WHERE active = 1`,
+    )
+    .get();
+  return r?.n ?? 0;
+}
+
+function computeCobertura(sourceCount: number, total: number): Cobertura {
+  if (total <= 0) return { label: 'tipica', count: sourceCount, total };
+  const ratio = sourceCount / total;
+  let label: Cobertura['label'] = 'tipica';
+  if (ratio >= COBERTURA_AMPLIA_RATIO) label = 'amplia';
+  else if (sourceCount <= COBERTURA_ACOTADA_MAX) label = 'acotada';
+  return { label, count: sourceCount, total };
+}
+
+function computeTrend(topicId: number, currentImportance: number): TopicTrend | null {
+  const prior = getDb()
+    .prepare<[number, string], { importance: number }>(
+      `SELECT importance FROM topic_scores
+       WHERE topic_id = ? AND window_hours = 24 AND computed_at <= ?
+       ORDER BY computed_at DESC LIMIT 1`,
+    )
+    .get(topicId, trendLookbackIso());
+  if (!prior || prior.importance <= 0) return null;
+  const deltaPct = Math.round(
+    ((currentImportance - prior.importance) / prior.importance) * 100,
+  );
+  let direction: TopicTrend['direction'] = 'flat';
+  if (deltaPct >= TREND_FLAT_THRESHOLD_PCT) direction = 'up';
+  else if (deltaPct <= -TREND_FLAT_THRESHOLD_PCT) direction = 'down';
+  return { direction, deltaPct };
+}
 
 const listQuery = z.object({
   window: z.enum(['24h']).optional().default('24h'),
@@ -52,6 +103,10 @@ interface ArticleSnippetRow {
   url: string;
   published_at: string;
   image_url: string | null;
+  // Carried only by the detail-handler query; the list-handler (home cards)
+  // never reads it. Keep the row shape unified to avoid a parallel type for
+  // the same SELECT.
+  summary?: string | null;
 }
 
 function fetchTopArticles(topicId: number): TopicListItem['topArticles'] {
@@ -133,6 +188,14 @@ function buildBreadcrumbs(topic: Topic): Array<Pick<Topic, 'id' | 'slug' | 'labe
 
 export const topicsRoute = new Hono();
 
+// Topic data refreshes hourly (ingest cron). Edge caches it for 5 min and
+// can keep serving stale up to 1 h while it revalidates in the background —
+// covers the case where Netlify ISR or a CDN sits between us and the user.
+topicsRoute.use('*', async (c, next) => {
+  await next();
+  c.header('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600');
+});
+
 // ─── GET /api/topics — ranked list ─────────────────────────────────────────
 topicsRoute.get('/', zValidator('query', listQuery), (c) => {
   const { limit, scope, minSources } = c.req.valid('query');
@@ -169,10 +232,11 @@ topicsRoute.get('/', zValidator('query', listQuery), (c) => {
          LIMIT ?`,
       )
       .all(computedAt ?? new Date().toISOString(), cutoff, limit) as unknown as RankedTopicRow[];
+    const totalSources = activeSourceCount();
     const body: TopicListResponse = {
       computedAt: computedAt ?? new Date().toISOString(),
       windowHours: 24,
-      topics: rows.map((r) => buildListItem(r)),
+      topics: rows.map((r) => buildListItem(r, totalSources)),
     };
     return c.json(body);
   }
@@ -216,15 +280,16 @@ topicsRoute.get('/', zValidator('query', listQuery), (c) => {
     )
     .all(cutoffIso(), scope, minSources, limit);
 
+  const totalSources = activeSourceCount();
   const body: TopicListResponse = {
     computedAt: computedAt ?? new Date().toISOString(),
     windowHours: 24,
-    topics: rows.map((r) => buildListItem(r)),
+    topics: rows.map((r) => buildListItem(r, totalSources)),
   };
   return c.json(body);
 });
 
-function buildListItem(r: RankedTopicRow): TopicListItem {
+function buildListItem(r: RankedTopicRow, totalSources: number): TopicListItem {
   const fullRow = getDb()
     .prepare<[number], TopicRowFull>(`SELECT * FROM topics WHERE id = ?`)
     .get(r.topic_id);
@@ -237,6 +302,8 @@ function buildListItem(r: RankedTopicRow): TopicListItem {
     importance: r.importance,
     sourceCount: r.source_count,
     articleCount: r.article_count,
+    cobertura: computeCobertura(r.source_count, totalSources),
+    trend: computeTrend(r.topic_id, r.importance),
     breadcrumbs: topic ? buildBreadcrumbs(topic) : [],
     topArticles: fetchTopArticles(r.topic_id),
   };
@@ -294,7 +361,9 @@ topicsRoute.get('/:slug', (c) => {
       }));
   }
 
-  // Articles directly assigned (or inherited via descendants for evergreen)
+  // Articles directly assigned (or inherited via descendants for evergreen).
+  // Detail-handler query carries `summary` so the topic page can render the
+  // LLM-generated blurb with attribution under each headline.
   const articles = (topic.scope === 'evergreen'
     ? getDb()
         .prepare<
@@ -306,7 +375,7 @@ topicsRoute.get('/:slug', (c) => {
              UNION ALL
              SELECT t.id FROM topics t JOIN tree x ON t.parent_topic_id = x.id
            )
-           SELECT DISTINCT a.id, a.domain, a.headline, a.url, a.published_at, a.image_url
+           SELECT DISTINCT a.id, a.domain, a.headline, a.url, a.published_at, a.image_url, a.summary
            FROM article_topics at
            JOIN articles a ON a.id = at.article_id
            WHERE at.topic_id IN (SELECT id FROM tree) AND at.is_primary = 1
@@ -319,7 +388,7 @@ topicsRoute.get('/:slug', (c) => {
           [number],
           ArticleSnippetRow
         >(
-          `SELECT a.id, a.domain, a.headline, a.url, a.published_at, a.image_url
+          `SELECT a.id, a.domain, a.headline, a.url, a.published_at, a.image_url, a.summary
            FROM article_topics at
            JOIN articles a ON a.id = at.article_id
            WHERE at.topic_id = ? AND at.is_primary = 1
@@ -331,13 +400,21 @@ topicsRoute.get('/:slug', (c) => {
     id: r.id,
     domain: r.domain,
     headline: r.headline,
+    summary: r.summary ?? null,
     url: r.url,
     publishedAt: r.published_at,
     imageUrl: r.image_url,
   }));
 
+  // Source diversity is computed live from the article rows we just pulled
+  // — same source-of-truth as the rendered list, so the badge can never
+  // drift from what the user sees.
+  const distinctSources = new Set(articles.map((a) => a.domain)).size;
+  const cobertura = computeCobertura(distinctSources, activeSourceCount());
+  const trend = computeTrend(topic.id, importance);
+
   return c.json({
-    topic: { ...topic, breadcrumbs, importance },
+    topic: { ...topic, breadcrumbs, importance, cobertura, trend },
     descendants,
     articles,
   });

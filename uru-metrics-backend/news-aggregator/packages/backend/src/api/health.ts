@@ -4,6 +4,13 @@ import type { HealthResponse } from '@uru/shared';
 
 export const healthRoute = new Hono();
 
+// Health must reflect real-time state — uptime monitors and the on-call
+// dashboard depend on it. Never cache.
+healthRoute.use('*', async (c, next) => {
+  await next();
+  c.header('Cache-Control', 'no-store');
+});
+
 healthRoute.get('/', (c) => {
   let db: 'ok' | 'error' = 'ok';
   let lastIngestAt: string | null = null;

@@ -111,3 +111,75 @@ CREATE TABLE IF NOT EXISTS ingest_runs (
   articles_new  INTEGER NOT NULL DEFAULT 0,
   error_message TEXT
 );
+
+-- ─── Full-text search (FTS5) ──────────────────────────────────────────────
+-- External-content table over `articles` — the FTS index doesn't duplicate
+-- raw text on disk; the triggers below keep it in sync. Column names must
+-- match `articles` exactly because FTS5's external-content reader pulls
+-- by column name.
+--
+-- Tokenizer:
+--   unicode61 strips punctuation, lowercases.
+--   remove_diacritics 2 normalizes Spanish accents so "futbol" matches
+--     "fútbol" and "Lacalle Pou" matches "lacalle-pou".
+--
+-- Indexed columns: headline + summary + entities_json + content. content
+-- carries the largest payload but offers the best recall for body-text
+-- queries. NULL-valued columns are coalesced to '' in the triggers.
+CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
+  headline,
+  summary,
+  entities_json,
+  content,
+  content='articles',
+  content_rowid='id',
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+-- Sync triggers. SQLite's `IF NOT EXISTS` is honored on CREATE TRIGGER, so
+-- replays of schema.sql are safe.
+CREATE TRIGGER IF NOT EXISTS articles_fts_ai
+AFTER INSERT ON articles BEGIN
+  INSERT INTO articles_fts(rowid, headline, summary, entities_json, content)
+  VALUES (
+    new.id,
+    new.headline,
+    COALESCE(new.summary, ''),
+    COALESCE(new.entities_json, ''),
+    COALESCE(new.content, '')
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS articles_fts_ad
+AFTER DELETE ON articles BEGIN
+  INSERT INTO articles_fts(articles_fts, rowid, headline, summary, entities_json, content)
+  VALUES (
+    'delete',
+    old.id,
+    old.headline,
+    COALESCE(old.summary, ''),
+    COALESCE(old.entities_json, ''),
+    COALESCE(old.content, '')
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS articles_fts_au
+AFTER UPDATE ON articles BEGIN
+  INSERT INTO articles_fts(articles_fts, rowid, headline, summary, entities_json, content)
+  VALUES (
+    'delete',
+    old.id,
+    old.headline,
+    COALESCE(old.summary, ''),
+    COALESCE(old.entities_json, ''),
+    COALESCE(old.content, '')
+  );
+  INSERT INTO articles_fts(rowid, headline, summary, entities_json, content)
+  VALUES (
+    new.id,
+    new.headline,
+    COALESCE(new.summary, ''),
+    COALESCE(new.entities_json, ''),
+    COALESCE(new.content, '')
+  );
+END;

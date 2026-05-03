@@ -33,6 +33,35 @@ function migrateLlmUsageCacheCols(): void {
   addColumnIfMissing('llm_usage', 'cache_read_input_tok', 'INTEGER NOT NULL DEFAULT 0');
 }
 
+// Populate articles_fts from existing rows the first time it appears. The
+// schema's INSERT/UPDATE/DELETE triggers keep it in sync from this point
+// onward — this only handles the historical backfill.
+//
+// Idempotent: skipped when the FTS table is already at parity with the
+// articles table. Safe to re-run on every boot.
+function backfillArticlesFts(): void {
+  const db = getDb();
+  const ftsRow = db
+    .prepare<[], { n: number }>(`SELECT COUNT(*) AS n FROM articles_fts`)
+    .get();
+  const articlesRow = db
+    .prepare<[], { n: number }>(`SELECT COUNT(*) AS n FROM articles`)
+    .get();
+  if (!ftsRow || !articlesRow) return;
+  if (ftsRow.n >= articlesRow.n) return;
+
+  console.log(
+    `[migrate] Backfilling articles_fts (${articlesRow.n} rows)…`,
+  );
+  // FTS5's 'rebuild' command repopulates the index from the external
+  // content table in a single statement — much faster than row-by-row.
+  db.exec(`INSERT INTO articles_fts(articles_fts) VALUES('rebuild')`);
+  const after = db
+    .prepare<[], { n: number }>(`SELECT COUNT(*) AS n FROM articles_fts`)
+    .get();
+  console.log(`[migrate] articles_fts now has ${after?.n ?? 0} rows`);
+}
+
 function upsertSources(): void {
   const db = getDb();
   const stmt = db.prepare(`
@@ -68,6 +97,7 @@ function upsertSources(): void {
 function main(): void {
   applySchema();
   migrateLlmUsageCacheCols();
+  backfillArticlesFts();
   upsertSources();
 
   // Migrate topic slugs from "<base>-<hash>" to bare "<base>" wherever
