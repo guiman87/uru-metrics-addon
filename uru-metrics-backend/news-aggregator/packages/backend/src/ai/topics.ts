@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import slugify from 'slugify';
-import type { Topic, TopicScope } from '@uru/shared';
+import type { EntityType, Topic, TopicScope } from '@uru/shared';
 import { getDb } from '../db/client.js';
 
 // Strip accents, lowercase, drop punctuation. Two LLM-rephrased keyword sets
@@ -50,6 +50,7 @@ interface TopicRow {
   first_seen_at: string;
   last_seen_at: string;
   status: string;
+  entity_type: string | null;
 }
 
 function rowToTopic(r: TopicRow): Topic {
@@ -64,6 +65,7 @@ function rowToTopic(r: TopicRow): Topic {
     firstSeenAt: r.first_seen_at,
     lastSeenAt: r.last_seen_at,
     status: r.status as Topic['status'],
+    entityType: (r.entity_type as EntityType | null) ?? null,
   };
 }
 
@@ -88,6 +90,31 @@ export function getEvergreenTopics(): Topic[] {
     )
     .all()
     .map(rowToTopic);
+}
+
+// Just the evergreens that were promoted from named entities (Peñarol,
+// Frente Amplio, Lacalle Pou, …). Used by the cluster step's secondary
+// pass to detect article ↔ entity links.
+export function getEntityEvergreens(): Topic[] {
+  return getDb()
+    .prepare<[], TopicRow>(
+      `SELECT * FROM topics
+       WHERE scope = 'evergreen' AND status = 'active' AND entity_type IS NOT NULL
+       ORDER BY label`,
+    )
+    .all()
+    .map(rowToTopic);
+}
+
+// All registered aliases for a given topic — used to match articles
+// against alternative casings/variants the scrapers may emit.
+export function getAliasesForTopic(topicId: number): string[] {
+  return getDb()
+    .prepare<[number], { alias: string }>(
+      `SELECT alias FROM topic_aliases WHERE topic_id = ?`,
+    )
+    .all(topicId)
+    .map((r) => r.alias);
 }
 
 export function getActiveCandidateTopics(daysBack = 7): Topic[] {

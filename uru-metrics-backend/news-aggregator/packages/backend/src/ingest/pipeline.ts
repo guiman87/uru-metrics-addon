@@ -6,6 +6,7 @@ import { getKnownUrlsForDomain, storeArticles, touchSourceCrawledAt } from './st
 import { sources as configuredSources } from './sources.js';
 import { runCategorize } from '../ai/categorize.js';
 import { runCluster } from '../ai/cluster.js';
+import { linkArticlesToEntityEvergreens } from '../ai/link-entities.js';
 import { runScore } from '../ai/rank.js';
 import { triggerFrontendBuild } from '../jobs/build-hook.js';
 import type { ScrapedArticle } from '@uru/shared';
@@ -29,6 +30,7 @@ export interface PipelineResult {
   ai: {
     categorize: { ok: number; failed: number; skipped: number; capHit: boolean } | null;
     cluster: { assigned: number; created: number; reused: number; capHit: boolean } | null;
+    entityLinks: { entityEvergreens: number; linksInserted: number } | null;
     score: { topicsScored: number; capHit: boolean } | null;
   };
 }
@@ -69,7 +71,12 @@ export async function runIngest(opts: RunIngestOptions = {}): Promise<PipelineRe
   const runId = startRun();
   const perSource: PipelineResult['perSource'] = [];
   let totalInserted = 0;
-  const ai: PipelineResult['ai'] = { categorize: null, cluster: null, score: null };
+  const ai: PipelineResult['ai'] = {
+    categorize: null,
+    cluster: null,
+    entityLinks: null,
+    score: null,
+  };
 
   try {
     const active = configuredSources.filter((s) => s.active);
@@ -141,6 +148,20 @@ export async function runIngest(opts: RunIngestOptions = {}): Promise<PipelineRe
           reused: cl.topicsReused,
           capHit: cl.capHit,
         };
+
+        // No-op until at least one entity-evergreen exists (i.e. the
+        // operator has run `npm run promote:apply`). Cheap when there's
+        // nothing to do — early-returns from the function.
+        const links = linkArticlesToEntityEvergreens();
+        ai.entityLinks = {
+          entityEvergreens: links.entityEvergreens,
+          linksInserted: links.linksInserted,
+        };
+        if (links.entityEvergreens > 0) {
+          console.log(
+            `[pipeline] entity-links: scanned=${links.articlesScanned} inserted=${links.linksInserted} already=${links.linksAlreadyPresent} (${links.entityEvergreens} entity evergreens)`,
+          );
+        }
 
         if (!cl.capHit) {
           const sc = await runScore({ providerName: opts.providerName });

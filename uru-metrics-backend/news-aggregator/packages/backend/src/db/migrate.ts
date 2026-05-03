@@ -33,6 +33,14 @@ function migrateLlmUsageCacheCols(): void {
   addColumnIfMissing('llm_usage', 'cache_read_input_tok', 'INTEGER NOT NULL DEFAULT 0');
 }
 
+// Phase 2: entity-evergreen promotion. The new entity_type column tags
+// evergreens that were promoted from frequently-mentioned entities so the
+// UI and the cluster step can treat them differently from the 12 seeded
+// verticals (where it stays NULL).
+function migrateTopicsEntityType(): void {
+  addColumnIfMissing('topics', 'entity_type', 'TEXT');
+}
+
 // Populate articles_fts from existing rows the first time it appears. The
 // schema's INSERT/UPDATE/DELETE triggers keep it in sync from this point
 // onward — this only handles the historical backfill.
@@ -97,6 +105,7 @@ function upsertSources(): void {
 function main(): void {
   applySchema();
   migrateLlmUsageCacheCols();
+  migrateTopicsEntityType();
   backfillArticlesFts();
   upsertSources();
 

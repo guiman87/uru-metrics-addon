@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getDb } from '../db/client.js';
 import type {
   Cobertura,
+  EntityType,
   Topic,
   TopicListItem,
   TopicListResponse,
@@ -154,6 +155,7 @@ interface TopicRowFull {
   first_seen_at: string;
   last_seen_at: string;
   status: string;
+  entity_type: string | null;
 }
 
 function rowToTopic(r: TopicRowFull): Topic {
@@ -168,6 +170,7 @@ function rowToTopic(r: TopicRowFull): Topic {
     firstSeenAt: r.first_seen_at,
     lastSeenAt: r.last_seen_at,
     status: r.status as Topic['status'],
+    entityType: (r.entity_type as EntityType | null) ?? null,
   };
 }
 

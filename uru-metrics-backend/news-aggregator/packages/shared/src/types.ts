@@ -53,6 +53,12 @@ export interface ScrapedArticle {
 export type TopicScope = 'evergreen' | 'event' | 'story';
 export type TopicStatus = 'active' | 'merged' | 'archived';
 
+// Set on evergreens that were promoted from a frequently-mentioned named
+// entity (Peñarol → 'team', Frente Amplio → 'party', Lacalle Pou →
+// 'person', ANTEL → 'org', Maldonado → 'place'). NULL on the 12 seeded
+// vertical evergreens like Política / Deportes / Economía.
+export type EntityType = 'person' | 'party' | 'org' | 'team' | 'place';
+
 export interface Topic {
   id: number;
   slug: string;
@@ -64,6 +70,7 @@ export interface Topic {
   firstSeenAt: string;
   lastSeenAt: string;
   status: TopicStatus;
+  entityType: EntityType | null;
 }
 
 export interface TopicWithBreadcrumbs extends Topic {

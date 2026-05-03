@@ -49,7 +49,13 @@ CREATE TABLE IF NOT EXISTS topics (
   scope           TEXT NOT NULL DEFAULT 'story',  -- 'evergreen'|'event'|'story'
   first_seen_at   TEXT NOT NULL,
   last_seen_at    TEXT NOT NULL,
-  status          TEXT NOT NULL DEFAULT 'active'  -- 'active'|'merged'|'archived'
+  status          TEXT NOT NULL DEFAULT 'active', -- 'active'|'merged'|'archived'
+  -- For evergreens promoted from frequently-mentioned entities
+  -- (Peñarol, Frente Amplio, Lacalle Pou, ANTEL, etc.). NULL for the
+  -- 12 seeded vertical evergreens. Lets the UI style entity pages
+  -- differently and lets the cluster step know which evergreens to
+  -- match articles against by entity name.
+  entity_type     TEXT                            -- 'person'|'party'|'org'|'team'|'place'|null
 );
 CREATE INDEX IF NOT EXISTS idx_topics_last_seen ON topics(last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_topics_parent    ON topics(parent_topic_id);
