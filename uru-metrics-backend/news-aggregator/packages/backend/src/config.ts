@@ -48,6 +48,18 @@ export const config = {
     openaiApiKey: process.env.OPENAI_API_KEY ?? '',
   },
   adminToken: process.env.ADMIN_TOKEN ?? '',
+  // Optional cron-driven entity-evergreen promotion. Off by default —
+  // operators are expected to run the manual flow at least once before
+  // flipping the flag, so they can sanity-check the LLM's output. The
+  // thresholds default well above the manual ones (40/6 vs 20/4) so an
+  // automated false positive is much less likely.
+  entityAutoPromote: {
+    enabled:
+      (process.env.ENTITY_AUTO_PROMOTE_ENABLED ?? 'false').toLowerCase() === 'true',
+    minMentions: envNum('ENTITY_AUTO_PROMOTE_MIN_MENTIONS', 40),
+    minSources: envNum('ENTITY_AUTO_PROMOTE_MIN_SOURCES', 6),
+    top: envNum('ENTITY_AUTO_PROMOTE_TOP', 20),
+  },
   tzDisplay: envStr('TZ_DISPLAY', 'America/Montevideo'),
   packageRoot: PACKAGE_ROOT,
 };

@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { config } from './config.js';
+import { adminRoute } from './api/admin.js';
 import { healthRoute } from './api/health.js';
 import { articlesRoute } from './api/articles.js';
 import { searchRoute } from './api/search.js';
@@ -16,14 +17,17 @@ app.use(
   '/api/*',
   cors({
     origin: config.corsOrigins,
-    allowMethods: ['GET', 'OPTIONS'],
-    allowHeaders: ['Content-Type'],
+    // Admin endpoints accept POST so we have to allow it at the CORS
+    // layer too; auth still gates anything destructive.
+    allowMethods: ['GET', 'POST', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization'],
     maxAge: 600,
   }),
 );
 
 app.get('/', (c) => c.text('uru-metrics / news-aggregator API\n'));
 
+app.route('/api/admin', adminRoute);
 app.route('/api/health', healthRoute);
 app.route('/api/articles', articlesRoute);
 app.route('/api/search', searchRoute);

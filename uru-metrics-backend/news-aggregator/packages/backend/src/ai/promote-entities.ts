@@ -20,6 +20,129 @@ export interface ScanCandidate {
   sampleHeadlines: string[];
 }
 
+export interface ScanOptions {
+  daysBack?: number;
+  minMentions?: number;
+  minSources?: number;
+  top?: number;
+}
+
+interface ArticleRow {
+  id: number;
+  domain: string;
+  headline: string;
+  entities_json: string | null;
+}
+
+function normalizeLabel(raw: string): string {
+  return raw
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function pickCanonicalCasing(casings: Map<string, number>): string {
+  let best: { value: string; count: number } | null = null;
+  for (const [value, count] of casings.entries()) {
+    if (!best || count > best.count) best = { value, count };
+  }
+  return best?.value ?? '';
+}
+
+// Pure SQL pass that aggregates articles.entities_json into ranked
+// candidates. Excludes anything already a topic (so we never propose a
+// duplicate of a seeded vertical or a previously-promoted entity).
+// Reusable from the CLI, the admin HTTP endpoint, and the cron
+// auto-promoter — they all want the same shape and the same filters.
+export function scanEntities(opts: ScanOptions = {}): ScanCandidate[] {
+  const daysBack = opts.daysBack ?? 90;
+  const minMentions = opts.minMentions ?? 20;
+  const minSources = opts.minSources ?? 4;
+  const top = opts.top ?? 50;
+
+  const cutoff = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+  const articles = getDb()
+    .prepare<[string], ArticleRow>(
+      `SELECT id, domain, headline, entities_json
+       FROM articles
+       WHERE status = 'categorized' AND published_at >= ? AND entities_json IS NOT NULL`,
+    )
+    .all(cutoff);
+
+  const skip = new Set(
+    getDb()
+      .prepare<[], { label: string }>(
+        `SELECT label FROM topics WHERE scope = 'evergreen'`,
+      )
+      .all()
+      .map((r) => normalizeLabel(r.label))
+      .filter((s) => s.length > 0),
+  );
+
+  interface Accum {
+    candidateLabel: string;
+    normalizedLabel: string;
+    mentionCount: number;
+    sourceDomains: Set<string>;
+    sampleHeadlines: string[];
+    casings: Map<string, number>;
+  }
+  const accum = new Map<string, Accum>();
+  for (const a of articles) {
+    let entities: unknown;
+    try {
+      entities = JSON.parse(a.entities_json ?? 'null');
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(entities)) continue;
+    const seen = new Set<string>();
+    for (const raw of entities) {
+      if (typeof raw !== 'string') continue;
+      const trimmed = raw.trim();
+      if (trimmed.length < 3 || trimmed.length > 80) continue;
+      const norm = normalizeLabel(trimmed);
+      if (norm.length < 3) continue;
+      if (skip.has(norm)) continue;
+      if (seen.has(norm)) continue;
+      seen.add(norm);
+
+      let entry = accum.get(norm);
+      if (!entry) {
+        entry = {
+          candidateLabel: trimmed,
+          normalizedLabel: norm,
+          mentionCount: 0,
+          sourceDomains: new Set<string>(),
+          sampleHeadlines: [],
+          casings: new Map<string, number>(),
+        };
+        accum.set(norm, entry);
+      }
+      entry.mentionCount += 1;
+      entry.sourceDomains.add(a.domain);
+      entry.casings.set(trimmed, (entry.casings.get(trimmed) ?? 0) + 1);
+      if (entry.sampleHeadlines.length < 5) entry.sampleHeadlines.push(a.headline);
+    }
+  }
+
+  return [...accum.values()]
+    .filter((c) => c.mentionCount >= minMentions && c.sourceDomains.size >= minSources)
+    .map((c) => ({
+      candidateLabel: pickCanonicalCasing(c.casings),
+      normalizedLabel: c.normalizedLabel,
+      mentionCount: c.mentionCount,
+      sourceCount: c.sourceDomains.size,
+      sourceDomains: [...c.sourceDomains].sort(),
+      sampleHeadlines: c.sampleHeadlines,
+    }))
+    .sort((a, b) => b.mentionCount - a.mentionCount || b.sourceCount - a.sourceCount)
+    .slice(0, top);
+}
+
 const PromoteAssignmentSchema = z.object({
   normalizedLabel: z.string(),
   include: z.boolean(),

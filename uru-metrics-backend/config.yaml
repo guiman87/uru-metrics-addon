@@ -1,6 +1,6 @@
 ---
 name: uru-metrics backend
-version: "0.7.0"
+version: "0.8.0"
 slug: uru-metrics-backend
 description: >-
   News aggregator backend for uru-metrics. Crawls Uruguay news portals
@@ -40,6 +40,14 @@ options:
     - "https://urumetrics.netlify.app"
   netlify_build_hook_url: ""
   git_ref: main
+  # Entity-evergreen auto-promotion. Off by default — flip on once you've
+  # verified the manual flow looks reasonable. Thresholds default well above
+  # the manual ones (40/6 vs 20/4) so an automated false positive is much
+  # less likely.
+  entity_auto_promote_enabled: false
+  entity_auto_promote_min_mentions: 40
+  entity_auto_promote_min_sources: 6
+  entity_auto_promote_top: 20
 schema:
   llm_provider: list(claude|gemini|openai|stub)
   llm_model_categorize: str
@@ -56,5 +64,9 @@ schema:
     - str
   netlify_build_hook_url: str?
   git_ref: str
+  entity_auto_promote_enabled: bool
+  entity_auto_promote_min_mentions: int(1,)
+  entity_auto_promote_min_sources: int(1,)
+  entity_auto_promote_top: int(1,)
 map:
   - share:rw

@@ -7,7 +7,10 @@ import { sources as configuredSources } from './sources.js';
 import { runCategorize } from '../ai/categorize.js';
 import { runCluster } from '../ai/cluster.js';
 import { linkArticlesToEntityEvergreens } from '../ai/link-entities.js';
+import { promoteEntities, scanEntities } from '../ai/promote-entities.js';
+import { getProvider } from '../ai/provider.js';
 import { runScore } from '../ai/rank.js';
+import { config } from '../config.js';
 import { triggerFrontendBuild } from '../jobs/build-hook.js';
 import type { ScrapedArticle } from '@uru/shared';
 
@@ -31,6 +34,7 @@ export interface PipelineResult {
     categorize: { ok: number; failed: number; skipped: number; capHit: boolean } | null;
     cluster: { assigned: number; created: number; reused: number; capHit: boolean } | null;
     entityLinks: { entityEvergreens: number; linksInserted: number } | null;
+    entityPromote: { considered: number; inserted: number } | null;
     score: { topicsScored: number; capHit: boolean } | null;
   };
 }
@@ -75,6 +79,7 @@ export async function runIngest(opts: RunIngestOptions = {}): Promise<PipelineRe
     categorize: null,
     cluster: null,
     entityLinks: null,
+    entityPromote: null,
     score: null,
   };
 
@@ -161,6 +166,41 @@ export async function runIngest(opts: RunIngestOptions = {}): Promise<PipelineRe
           console.log(
             `[pipeline] entity-links: scanned=${links.articlesScanned} inserted=${links.linksInserted} already=${links.linksAlreadyPresent} (${links.entityEvergreens} entity evergreens)`,
           );
+        }
+
+        // Optional auto-promotion. Off by default; the operator opts in via
+        // ENTITY_AUTO_PROMOTE_ENABLED so a misconfigured deploy can't slip
+        // entity-evergreens into prod without a chance to review.
+        if (config.entityAutoPromote.enabled && !cl.capHit) {
+          const candidates = scanEntities({
+            daysBack: 90,
+            minMentions: config.entityAutoPromote.minMentions,
+            minSources: config.entityAutoPromote.minSources,
+            top: config.entityAutoPromote.top,
+          });
+          if (candidates.length === 0) {
+            ai.entityPromote = { considered: 0, inserted: 0 };
+          } else {
+            try {
+              const provider = getProvider(opts.providerName ?? config.llm.provider);
+              const stats = await promoteEntities({
+                candidates,
+                provider,
+                model: config.llm.modelCategorize,
+              });
+              ai.entityPromote = {
+                considered: stats.considered,
+                inserted: stats.inserted,
+              };
+              console.log(
+                `[pipeline] entity-promote: considered=${stats.considered} inserted=${stats.inserted} excluded=${stats.skippedExcluded} duplicate=${stats.skippedDuplicate} bad-parent=${stats.skippedBadParent} failed=${stats.failed}`,
+              );
+            } catch (err) {
+              console.warn(
+                `[pipeline] entity-promote failed: ${(err as Error).message}`,
+              );
+            }
+          }
         }
 
         if (!cl.capHit) {

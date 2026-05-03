@@ -27,6 +27,16 @@ if bashio::config.has_value 'netlify_build_hook_url'; then
   export NETLIFY_BUILD_HOOK_URL="$(bashio::config 'netlify_build_hook_url')"
 fi
 
+# Entity-evergreen auto-promotion (Phase 2). Off by default; the operator
+# flips entity_auto_promote_enabled in addon config once the manual flow
+# has been validated. Thresholds default to 40 mentions / 6 distinct
+# outlets — much stricter than the manual scan (20/4) so unattended
+# false positives stay rare.
+export ENTITY_AUTO_PROMOTE_ENABLED="$(bashio::config 'entity_auto_promote_enabled')"
+export ENTITY_AUTO_PROMOTE_MIN_MENTIONS="$(bashio::config 'entity_auto_promote_min_mentions')"
+export ENTITY_AUTO_PROMOTE_MIN_SOURCES="$(bashio::config 'entity_auto_promote_min_sources')"
+export ENTITY_AUTO_PROMOTE_TOP="$(bashio::config 'entity_auto_promote_top')"
+
 # Convert the cors_origins YAML list into a comma-separated string.
 export CORS_ORIGINS="$(bashio::config 'cors_origins | join(",")')"
 
